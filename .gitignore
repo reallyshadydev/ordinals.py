@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.env
+.wallet.json
+.wallet-test.json
+.wallet-*.json
+pending-txs.json
+*.psbt
+.DS_Store

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ordinals-py"
+version = "0.1.0"
+description = "Python ordinals inscriber for Pepecoin and other UTXO chains (no Node.js)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "embit>=0.8.0",
+]
+
+[project.scripts]
+ordinals-py = "ordinals_py.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ordinals_py*"]
