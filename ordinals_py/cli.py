@@ -15,6 +15,7 @@ from embit.networks import NETWORKS
 from embit.script import Script, p2pkh
 
 from .inscribe import inscribe
+from .send import send_utxo
 from .networks import get_network
 from .rpc import NodeRpc, RpcError
 from .script_builder import address_to_script_pubkey
@@ -78,7 +79,7 @@ def cmd_wallet_new() -> int:
   priv = ec.PrivateKey(os.urandom(32), network=embit_net)
   script = p2pkh(priv.get_public_key())
   address = script.address(embit_net)
-  script_hex = script.serialize().hex()
+  script_hex = address_to_script_pubkey(address).hex()
   wallet = new_wallet(
     priv.wif(embit_net),
     address,
@@ -187,21 +188,30 @@ def _display_txid(tx) -> str:
 
 
 def cmd_token(sub: str, argv: list[str]) -> int:
-  if len(argv) < 4:
-    print("usage: token mint|transfer|deploy ...", file=sys.stderr)
-    return 1
   net, _, _, _ = config()
   proto = os.environ.get("TOKEN_PROTOCOL", net["token_protocol"])
   if sub == "deploy":
+    if len(argv) < 4:
+      print("usage: token deploy <address> <tick> <max> <lim>", file=sys.stderr)
+      return 1
     address, tick, max_supply, lim = argv[0], argv[1], argv[2], argv[3]
-    body = json.dumps({"p": proto, "op": "deploy", "tick": tick.lower(), "max": max_supply, "lim": lim})
+    body = json.dumps(
+      {"p": proto, "op": "deploy", "tick": tick.lower(), "max": max_supply, "lim": lim},
+      separators=(",", ":"),
+    )
   elif sub in ("mint", "transfer"):
+    if len(argv) < 3:
+      print(f"usage: token {sub} <address> <tick> <amt> [repeat]", file=sys.stderr)
+      return 1
     address, tick, amt = argv[0], argv[1], argv[2]
     repeat = int(argv[3]) if len(argv) > 3 else 1
     op = sub
     for i in range(repeat):
       print(f"{op} {proto} {i + 1}/{repeat}")
-      body = json.dumps({"p": proto, "op": op, "tick": tick.lower(), "amt": amt})
+      body = json.dumps(
+        {"p": proto, "op": op, "tick": tick.lower(), "amt": amt},
+        separators=(",", ":"),
+      )
       rc = cmd_mint(address, "text/plain;charset=utf-8", body.encode().hex())
       if rc != 0:
         return rc
@@ -210,6 +220,49 @@ def cmd_token(sub: str, argv: list[str]) -> int:
     print(f"unknown token subcommand: {sub}", file=sys.stderr)
     return 1
   return cmd_mint(address, "text/plain;charset=utf-8", body.encode().hex())
+
+
+def cmd_send(dest: str, utxo_ref: str | None = None) -> int:
+    net, fee_per_kb, _, rpc = config()
+    wallet = load_wallet()
+    if not os.environ.get("ORDINALS_SKIP_SYNC"):
+        sync_wallet(wallet, rpc)
+
+    txid, vout = None, None
+    if utxo_ref:
+        if ":" not in utxo_ref:
+            print("usage: send <address> [txid:vout]", file=sys.stderr)
+            return 1
+        txid, vout_s = utxo_ref.split(":", 1)
+        vout = int(vout_s)
+
+    priv = ec.PrivateKey.from_wif(wallet["privkey"])
+    print(
+        f"[ordinals-py] send fee per-kb={fee_per_kb} (~{fee_per_kb / 1000:.0f} ribbits/byte)",
+        file=sys.stderr,
+    )
+    tx = send_utxo(
+        wallet,
+        dest,
+        privkey=priv,
+        fee_per_kb=fee_per_kb,
+        tx_version=net["tx_version"],
+        txid=txid,
+        vout=vout,
+    )
+    txid_hex = _display_txid(tx)
+    print(f"txid: {txid_hex}")
+    hex_tx = tx.serialize().hex()
+    try:
+        rpc.send_raw_transaction(hex_tx, retry=True)
+    except RpcError as e:
+        print(f"broadcast failed: {e}", file=sys.stderr)
+        Path("pending-txs.json").write_text(json.dumps([hex_tx]))
+        return 1
+
+    update_wallet_from_tx(wallet, tx, txid_hex)
+    save_wallet(wallet)
+    return 0
 
 
 def cmd_rebroadcast_pending() -> int:
@@ -229,7 +282,7 @@ def cmd_rebroadcast_pending() -> int:
 def main(argv: list[str] | None = None) -> int:
   argv = argv if argv is not None else sys.argv[1:]
   if not argv:
-    print("usage: python -m ordinals_py <mint|wallet|token|info> ...", file=sys.stderr)
+    print("usage: python -m ordinals_py <mint|send|wallet|token|info> ...", file=sys.stderr)
     return 1
 
   if Path("pending-txs.json").is_file() and argv[0] not in ("wallet", "info"):
@@ -243,6 +296,11 @@ def main(argv: list[str] | None = None) -> int:
       print("usage: mint <address> <file>|<content-type> [hex]", file=sys.stderr)
       return 1
     return cmd_mint(argv[1], argv[2], argv[3] if len(argv) > 3 else None)
+  if cmd == "send":
+    if len(argv) < 2:
+      print("usage: send <address> [txid:vout]", file=sys.stderr)
+      return 1
+    return cmd_send(argv[1], argv[2] if len(argv) > 2 else None)
   if cmd == "wallet":
     sub = argv[1] if len(argv) > 1 else ""
     if sub == "new":
@@ -253,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
       return cmd_wallet_balance()
     print(f"unknown wallet subcommand: {sub}", file=sys.stderr)
     return 1
-  if cmd in ("drc-20", "token", "prc-20"):
+  if cmd in ("drc-20", "token", "prc-20", "wjk-20", "wrc-20"):
     sub = argv[1] if len(argv) > 1 else ""
     return cmd_token(sub, argv[2:])
   print(f"unknown command: {cmd}", file=sys.stderr)

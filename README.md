@@ -6,10 +6,22 @@ Compatible with `.env` and `.wallet.json` from [multi-ordinals-script](https://g
 
 ## Install
 
+**Requires embit 0.8+** (system `pip install embit` often gives 0.7 and breaks with `No module named 'embit.misc'`).
+
 ```bash
 cd ordinals-py
-pip install -e .
-# or: pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate   # optional
+.venv/bin/pip install -U pip
+.venv/bin/pip install embit==0.8.0
+```
+
+Then run via the venv (any of these):
+
+```bash
+./run.sh wallet new
+./ordinals.py wallet new          # auto-switches to .venv
+.venv/bin/python -m ordinals_py wallet new
 ```
 
 ## Configuration
@@ -45,6 +57,9 @@ python3 -m ordinals_py wallet balance
 
 # Inscribe
 python3 -m ordinals_py mint PYourAddress... ./image.png
+
+# Send inscription (0.001 coin on recipient output; change returns to wallet)
+python3 -m ordinals_py send WRecipient... [txid:vout]
 
 # PRC-20 / DRC-20
 python3 -m ordinals_py token mint PAddress... tick amount 1

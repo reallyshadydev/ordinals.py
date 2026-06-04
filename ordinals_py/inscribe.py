@@ -18,7 +18,7 @@ from .script_builder import (
     push_number,
     push_text,
 )
-from .wallet import update_wallet_from_tx
+from .wallet import update_wallet_from_tx, wallet_script_pubkey
 
 
 def _display_txid(tx: Transaction) -> str:
@@ -48,12 +48,20 @@ def _tx_fee(tx: Transaction, fee_per_kb: int) -> int:
     return max(1, len(tx.serialize()) * fee_per_kb // 1000)
 
 
-def _strip_change_outputs(tx: Transaction, wallet_script: bytes) -> None:
-    tx.vout = [o for o in tx.vout if o.script_pubkey.data != wallet_script]
+def _is_change_output(output: TransactionOutput, wallet_script_bytes: bytes) -> bool:
+    """Wallet outputs above inscription dust are change, not the inscription carrier."""
+    return (
+        output.script_pubkey.data == wallet_script_bytes
+        and output.value > INSCRIPTION_OUTPUT_SATS
+    )
+
+
+def _strip_change_outputs(tx: Transaction, wallet_script_bytes: bytes) -> None:
+    tx.vout = [o for o in tx.vout if not _is_change_output(o, wallet_script_bytes)]
 
 
 def _sign_wallet_inputs(tx: Transaction, privkey: ec.PrivateKey, pubkey: ec.PublicKey, wallet: dict) -> None:
-    wallet_script = Script(bytes.fromhex(wallet["script"]))
+    wallet_script = Script(wallet_script_pubkey(wallet))
     for i, inp in enumerate(tx.vin):
         for u in wallet["utxos"]:
             if bytes.fromhex(u["txid"]) != inp.txid or u["vout"] != inp.vout:
@@ -64,9 +72,11 @@ def _sign_wallet_inputs(tx: Transaction, privkey: ec.PrivateKey, pubkey: ec.Publ
             break
 
 
-def _payment_output_sum(tx: Transaction, wallet_script: bytes) -> int:
-    """Sum outputs excluding change back to the inscriber wallet."""
-    return sum(o.value for o in tx.vout if o.script_pubkey.data != wallet_script)
+def _payment_output_sum(tx: Transaction, wallet_script_bytes: bytes) -> int:
+    """Sum outputs excluding change; keep inscription dust (100k sats) even on same address."""
+    return sum(
+        o.value for o in tx.vout if not _is_change_output(o, wallet_script_bytes)
+    )
 
 
 def _input_sum(tx: Transaction, wallet: dict) -> int:
@@ -91,12 +101,13 @@ def fund_transaction(
     fee_per_kb: int,
 ) -> None:
     """Fund and sign wallet P2PKH inputs (ordinals.js fund())."""
-    wallet_script = bytes.fromhex(wallet["script"])
+    wallet_script_bytes = wallet_script_pubkey(wallet)
+    wallet_script = Script(wallet_script_bytes)
     pubkey = privkey.get_public_key()
 
     while True:
         input_amount = _input_sum(tx, wallet)
-        payment_out = _payment_output_sum(tx, wallet_script)
+        payment_out = _payment_output_sum(tx, wallet_script_bytes)
         fee = _tx_fee(tx, fee_per_kb)
 
         if tx.vin and tx.vout and input_amount >= payment_out + fee:
@@ -113,13 +124,13 @@ def fund_transaction(
         if not added:
             raise RuntimeError("not enough funds")
 
-        _strip_change_outputs(tx, wallet_script)
+        _strip_change_outputs(tx, wallet_script_bytes)
         input_amount = _input_sum(tx, wallet)
-        payment_out = _payment_output_sum(tx, wallet_script)
+        payment_out = _payment_output_sum(tx, wallet_script_bytes)
         fee = _tx_fee(tx, fee_per_kb)
         change = input_amount - payment_out - fee
         if change > 0:
-            tx.vout.append(TransactionOutput(change, Script(wallet_script)))
+            tx.vout.append(TransactionOutput(change, wallet_script))
 
         _sign_wallet_inputs(tx, privkey, pubkey, wallet)
 

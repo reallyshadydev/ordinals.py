@@ -11,6 +11,7 @@ from embit import ec
 from embit.script import Script
 
 from .networks import COIN
+from .script_builder import address_to_script_pubkey
 
 
 def wallet_path() -> Path:
@@ -67,12 +68,17 @@ def sync_wallet(wallet: dict[str, Any], rpc) -> dict[str, Any]:
     return wallet
 
 
+def wallet_script_pubkey(wallet: dict[str, Any]) -> bytes:
+    """Standard P2PKH scriptPubKey for this wallet (not embit Script.serialize())."""
+    return address_to_script_pubkey(wallet["address"])
+
+
 def update_wallet_from_tx(wallet: dict[str, Any], tx, txid_hex: str) -> None:
     """Remove spent UTXOs and add change outputs (matches ordinals.js updateWallet)."""
     spent = {(inp.txid.hex(), inp.vout) for inp in tx.vin}
     wallet["utxos"] = [u for u in wallet["utxos"] if (u["txid"], u["vout"]) not in spent]
 
-    wallet_script = wallet["script"]
+    wallet_script = wallet_script_pubkey(wallet).hex()
     for vout, out in enumerate(tx.vout):
         if out.script_pubkey.data == bytes.fromhex(wallet_script):
             wallet["utxos"].append(

@@ -5,6 +5,7 @@ dist/
 build/
 .eggs/
 venv/
+.venv/
 .env
 .wallet.json
 .wallet-test.json
